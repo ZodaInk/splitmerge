@@ -146,7 +146,7 @@ typedef struct First_Header {
 
 #define SPLITMERGE_FILE_VERSION 0
 
-#define SPLITMERGE_FILE_LIMIT 0x7fffff
-#define SPLITMERGE_MAX_UNSPLIT_FILE_SIZE (0xffff * (SPLITMERGE_FILE_LIMIT - sizeof(Shared_Header)))
-#define SPLITMERGE_MAX_FILE_NAME_AND_HEADER_SIZE (0xffff + sizeof(First_Header))
+#define SPLITMERGE_FILE_LIMIT 0x7FFBFF
+#define SPLITMERGE_MAX_UNSPLIT_FILE_SIZE (0xFFFF * (SPLITMERGE_FILE_LIMIT - sizeof(Shared_Header)))
+#define SPLITMERGE_MAX_FILE_NAME_AND_HEADER_SIZE (0xFFFF + sizeof(First_Header))
 #define SPLITMERGE_MAX_FIRST_FILE_SIZE (SPLITMERGE_FILE_LIMIT - sizeof(First_Header))

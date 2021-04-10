@@ -174,7 +174,7 @@ main(int arg_count, char **arg_data) {
                     }
                 }
                 
-                free(file.data);
+                ZI_FREE(file.data);
             }
         }
         
