@@ -46,7 +46,7 @@
 
 //~~~~~~~~~~~~~~~~
 //
-// 
+//
 //
 #define is_flag_set(var, flag) (((var) & (flag)) == (flag))
 
@@ -101,7 +101,7 @@ typedef struct String {
 enum Header_Flags {
 	Header_Flag__None       = 0x0,
 	Header_Flag__Big_Endian = 0x1,
-	
+    
 	Header_Flag__All = 0xff,
 };
 
@@ -119,12 +119,12 @@ typedef struct Shared_Header {
     
     //~ NOTE(Patrik): Header version number.
     u16 version;
-	
+    
 	//~ NOTE(Patrik): This id is to identify which file belongs to each other.
 	// How this number is made is not too important, it just needs to not
     // conflict with another file currently trying to be merged.
 	u32 unique_id;
-	
+    
 	//~ NOTE(Patrik): The order in which to merge the split files.
 	u16 file_index;
 } Shared_Header;
@@ -136,7 +136,7 @@ typedef struct First_Header {
     //~ NOTE(Patrik): total_file_count is the amount of split files.
     // Used to validate that the files recieved when merging is the correct amount.
     u16 total_file_count;
-	
+    
     //~ NOTE(Patrik): file_name_length is the length of the string.
     // There is no null terminator included in the file or in the length of the string.
 	u16 file_name_length;

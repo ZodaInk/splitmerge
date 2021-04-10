@@ -37,12 +37,12 @@
 static u32
 get_unique_id() {
 	u32 result = 0;
-	
+    
 	u16 n0 = (u16)rand();
 	u16 n1 = (u16)rand();
-	
+    
 	result = ((u32)n0 | ((u32)n1 << 16));
-	
+    
 	return result;
 }
 

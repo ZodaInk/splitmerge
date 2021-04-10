@@ -49,12 +49,12 @@ spltmrg_alloc(i64 size) {
 static bool
 is_big_endian() {
 	union {int i; char c[sizeof(int)];} x;
-	
+    
 	x.i = 1;
 	if(x.c[0] == 1) {
 		return false;
 	}
-	
+    
 	return true;
 }
 
@@ -357,7 +357,7 @@ append_bits(String *str, u64 value, i32 base, bool is_signed) {
 	if(str) {
 		bool is_negative = false;
 		i32 starting_length = str->length;
-		
+        
 		if(is_signed) {
 			i64 i = *(i64 *)&value;
 			if(i < 0) {
@@ -365,16 +365,16 @@ append_bits(String *str, u64 value, i32 base, bool is_signed) {
 				value = -i;
 			}
 		}
-		
+        
 		while(value >= base) {
 			char digit = digit_value_to_char((i32)(u32)(value % base));
 			append_char(str, digit);
 			value /= base;
 		}
-		
+        
 		char digit = digit_value_to_char((i32)(u32)(value % base));
 		append_char(str, digit);
-		
+        
 		if(is_negative) {
 			append_char(str, '-');
 		}
