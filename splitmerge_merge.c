@@ -40,7 +40,7 @@ typedef struct Merge_Bundle {
     u32     file_capacity;
     
     u32    unique_id;
-    String file_name;
+    String out_file_name;
 } Merge_Bundle;
 
 typedef struct Merge_Bundle_Array {
@@ -56,9 +56,9 @@ typedef struct Merge_Bundle_Array {
 //
 static bool
 is_valid_header(Shared_Header header) {
-    if((header.validation_0 == 'S') &&
-       (header.validation_1 == '+') &&
-       (header.validation_2 == 'M'))
+    if(header.validation_0 == SPLITMERGE_HEADER_VALIDATION[0] &&
+       header.validation_1 == SPLITMERGE_HEADER_VALIDATION[1] &&
+       header.validation_2 == SPLITMERGE_HEADER_VALIDATION[2])
     {
         return true;
     }
@@ -104,7 +104,7 @@ swap_endian_u64(u64 value) {
 
 static bool
 should_swap_endian(u8 flags) {
-    if(is_big_endian() != is_flag_set(flags, Header_Flag__Big_Endian)) {
+    if(is_big_endian() != (flags & Header_Flag__Big_Endian)) {
         return true;
     }
     return false;
@@ -116,7 +116,7 @@ make_merge_bundle(u32 unique_id) {
     
     result.unique_id     = unique_id;
     result.file_capacity = 128;
-    result.files         = ZI_ALLOC(String, result.file_capacity);
+    result.files         = SPLTMRG_ALLOC(String, result.file_capacity);
     
     return result;
 }
@@ -131,7 +131,7 @@ append_bundle(Merge_Bundle_Array *array, Merge_Bundle bundle) {
     if(array) {
         if(array->count + 1 >= array->capacity) {
             array->capacity += 4;
-            array->data = ZI_REALLOC(Merge_Bundle, array->data, array->capacity);
+            array->data = SPLTMRG_REALLOC(Merge_Bundle, array->data, array->capacity);
         }
         
         array->data[array->count] = bundle;
@@ -146,7 +146,7 @@ append_file_name(Merge_Bundle *bundle, String file_name, u32 file_index) {
             while(file_index >= bundle->file_capacity) {
                 bundle->file_capacity += 128;
             }
-            bundle->files = ZI_REALLOC(String, bundle->files, bundle->file_capacity);
+            bundle->files = SPLTMRG_REALLOC(String, bundle->files, bundle->file_capacity);
         }
         
         bundle->files[file_index] = file_name;
@@ -163,7 +163,7 @@ int
 main(int arg_count, char **arg_data) {
     Merge_Bundle_Array master_list = {0};
     master_list.capacity = 4;
-    master_list.data     = ZI_ALLOC(Merge_Bundle, master_list.capacity);
+    master_list.data     = SPLTMRG_ALLOC(Merge_Bundle, master_list.capacity);
     
     printf("SPLITMERGE <merge>\n");
     printf("%d potential split files.\n", arg_count - 1);
@@ -173,130 +173,171 @@ main(int arg_count, char **arg_data) {
     for_range(int, arg_index, 1, arg_count) {
         String arg = set_string_from_ntstring(arg_data[arg_index]);
         
-        File_Handle file_handle = open_file_for_reading(arg.data);
-        
-		if(is_file(file_handle)) {
-            File_Data file = make_file_data(SPLITMERGE_MAX_FILE_NAME_AND_HEADER_SIZE);
+        if(ends_with_cstring(arg, SPLITMERGE_FILE_EXTENSION_CSTRING)) {
+            File_Handle file_handle = os_open_file_for_reading(arg.data);
             
-            if(read_file(&file, file_handle, sizeof(First_Header)) > 0) {
-                Shared_Header *shared_header = (Shared_Header*)file.data;
+            if(os_is_handle_valid(file_handle)) {
+                File_Data file = make_file_data(SPLITMERGE_MAX_FILE_NAME_AND_HEADER_SIZE);
                 
-                if(is_valid_header(*shared_header)) {
-                    Merge_Bundle *bundle = 0;
+                if(os_read_file(&file, file_handle, sizeof(First_Header)) > 0) {
+                    Shared_Header *shared_header = (Shared_Header*)file.data;
                     
-                    if(should_swap_endian(shared_header->flags)) {
-                        shared_header->version    = swap_endian_u16(shared_header->version);
-                        shared_header->unique_id  = swap_endian_u32(shared_header->unique_id);
-                        shared_header->file_index = swap_endian_u16(shared_header->file_index);
-                    }
-                    
-                    For(i32, it_index, master_list.count) {
-                        Merge_Bundle *it = master_list.data + it_index;
-                        
-                        if(it->unique_id == shared_header->unique_id) {
-                            bundle = it;
-                            break;
-                        }
-                    }
-                    
-                    if(!bundle) {
-                        Merge_Bundle new_bundle = make_merge_bundle(shared_header->unique_id);
-                        append_bundle(&master_list, new_bundle);
-                        bundle = &master_list.data[master_list.count - 1];
-                    }
-                    
-                    if(shared_header->file_index == 0) {
-                        First_Header *header = (First_Header*)file.data;
+                    if(is_valid_header(*shared_header)) {
+                        Merge_Bundle *bundle = 0;
                         
                         if(should_swap_endian(shared_header->flags)) {
-                            header->file_name_length = swap_endian_u16(header->file_name_length);
+                            shared_header->version    = swap_endian_u16(shared_header->version);
+                            shared_header->unique_id  = swap_endian_u32(shared_header->unique_id);
+                            shared_header->file_index = swap_endian_u16(shared_header->file_index);
                         }
                         
-                        char *file_name_pos = (char*)file.data + file.length;
-                        
-                        bundle->file_name = make_string(64);
-                        
-                        append_string(&bundle->file_name, source_path);
-                        
-                        {
-                            i32 index = find_index_of_last(bundle->file_name, '/');
+                        For(i32, it_index, master_list.count) {
+                            Merge_Bundle *it = master_list.data + it_index;
                             
-                            if(index >= 0) {
-                                bundle->file_name.length -= bundle->file_name.length - index - 1;
-                            } else {
-                                index = find_index_of_last(bundle->file_name, '\\');
-                                
-                                if(index >= 0) {
-                                    bundle->file_name.length -= bundle->file_name.length - index - 1;
-                                }
+                            if(it->unique_id == shared_header->unique_id) {
+                                bundle = it;
+                                break;
                             }
                         }
                         
-                        append_cstring(&bundle->file_name, UNPACK_NTSTRING("merged_output/"));
-                        
-                        if(read_file(&file, file_handle, header->file_name_length) > 0) {
-                            append_cstring(&bundle->file_name, file_name_pos, header->file_name_length);
-                            null_terminate(&bundle->file_name);
+                        if(!bundle) {
+                            Merge_Bundle new_bundle = make_merge_bundle(shared_header->unique_id);
+                            append_bundle(&master_list, new_bundle);
+                            bundle = &master_list.data[master_list.count - 1];
                         }
+                        
+                        if(shared_header->file_index == 0) {
+                            First_Header *header = (First_Header*)file.data;
+                            
+                            if(should_swap_endian(shared_header->flags)) {
+                                header->file_name_length = swap_endian_u16(header->file_name_length);
+                            }
+                            
+                            char *file_name_pos = (char*)file.data + file.length;
+                            
+                            bundle->out_file_name = make_string(64);
+                            
+                            append_string(&bundle->out_file_name, source_path);
+                            
+                            {
+                                i32 index = find_index_of_last(bundle->out_file_name, '/');
+                                
+                                if(index >= 0) {
+                                    index = bundle->out_file_name.length - index - 1;
+                                    bundle->out_file_name.length -= index;
+                                } else {
+                                    index = find_index_of_last(bundle->out_file_name, '\\');
+                                    
+                                    if(index >= 0) {
+                                        index = bundle->out_file_name.length - index - 1;
+                                        bundle->out_file_name.length -= index;
+                                    }
+                                }
+                            }
+                            
+                            append_cstring(&bundle->out_file_name, UNPACK_NTSTRING("merged_output/"));
+                            
+                            if(os_read_file(&file, file_handle, header->file_name_length) > 0) {
+                                append_cstring(&bundle->out_file_name,
+                                               file_name_pos, header->file_name_length);
+                                
+                                null_terminate(&bundle->out_file_name);
+                            }
+                        }
+                        
+                        append_file_name(bundle, arg, shared_header->file_index);
+                    } else {
+                        printf("%s has an invalid header\n", arg.data);
                     }
-                    
-                    append_file_name(bundle, arg, shared_header->file_index);
                 }
+                
+                SPLTMRG_FREE(file.data);
             }
             
-            ZI_FREE(file.data);
-		}
-        
-        close_file(file_handle);
+            os_close_file(file_handle);
+        } else {
+            printf("%s is not a split file\n", arg.data);
+        }
 	}
     
     if(master_list.count > 0) {
-        File_Data dest_file   = make_file_data(SPLITMERGE_FILE_LIMIT);
-        File_Data source_file = make_file_data(SPLITMERGE_FILE_LIMIT);
+        File_Data file_buffer = make_file_data(SPLITMERGE_NITRO_FILE_LIMIT);
+        File_Data header_data = make_file_data(sizeof(First_Header));
+        File_Data read_data   = {0};
         
         For(i32, bundle_index, master_list.count) {
             printf("---===##===---\n");
             
             Merge_Bundle *bundle = master_list.data + bundle_index;
             
-            File_Handle dest_handle = open_file_for_writing(bundle->file_name.data);
+            File_Handle dest_handle = os_open_file_for_writing(bundle->out_file_name.data);
             
             if(dest_handle) {
                 For(u32, file_index, bundle->file_count) {
-                    File_Handle source_handle = open_file_for_reading(bundle->files[file_index].data);
+                    File_Handle source_handle = os_open_file_for_reading(bundle->files[file_index].data);
                     
-                    source_file.length = 0;
+                    header_data.length = 0;
+                    
                     if(source_handle) {
-                        if(read_file(&source_file, source_handle, source_file.capacity) > 0) {
-                            u8  *data   = source_file.data;
-                            i64  length = source_file.length;
-                            
-                            if(file_index == 0) {
-                                First_Header *header = (First_Header*)source_file.data;
+                        if(file_index == 0) {
+                            if(os_read_file(&header_data, source_handle, sizeof(First_Header)) > 0)
+                            {
+                                First_Header *header = (First_Header*)header_data.data;
                                 
-                                data   += sizeof(First_Header) + header->file_name_length + 1;
-                                length -= sizeof(First_Header) + header->file_name_length + 1;
-                            } else {
-                                data   += sizeof(Shared_Header);
-                                length -= sizeof(Shared_Header);
+                                u16 file_name_length = header->file_name_length;
+                                if(should_swap_endian(header->shared.flags)) {
+                                    file_name_length = swap_endian_u16(file_name_length);
+                                }
+                                
+                                os_move_file_pointer(source_handle, file_name_length + 1);
+                            }
+                        } else {
+                            os_move_file_pointer(source_handle, sizeof(Shared_Header));
+                        }
+                        
+                        i64 remaining_length = os_get_remaining_size_of_file(source_handle);
+                        while(remaining_length > 0) {
+                            read_data.length   = 0;
+                            read_data.data     = file_buffer.data     + file_buffer.length;
+                            read_data.capacity = file_buffer.capacity - file_buffer.length;
+                            
+                            if(os_read_file(&read_data, source_handle, read_data.capacity)) {
+                                file_buffer.length += read_data.length;
+                                
+                                if(file_buffer.length == file_buffer.capacity) {
+                                    printf("Merging file %d/%d - chunk %u/%u\n",
+                                           bundle_index + 1, master_list.count,
+                                           file_index, bundle->file_count);
+                                    
+                                    os_write_file(dest_handle, file_buffer.data, file_buffer.length);
+                                    
+                                    file_buffer.length = 0;
+                                }
                             }
                             
-                            printf("Merging bundle %d/%d - file %u/%u\n",
-                                   bundle_index + 1, master_list.count,
-                                   file_index + 1, bundle->file_count);
-                            write_data_to_file(dest_handle, data, length);
+                            remaining_length = os_get_remaining_size_of_file(source_handle);
                         }
                     }
                     
-                    close_file(source_handle);
+                    os_close_file(source_handle);
+                }
+                
+                if(file_buffer.length > 0) {
+                    printf("Merging file %d/%d - chunk %u/%u\n",
+                           bundle_index + 1, master_list.count,
+                           bundle->file_count, bundle->file_count);
+                    
+                    os_write_file(dest_handle, file_buffer.data, file_buffer.length);
+                    
+                    file_buffer.length = 0;
                 }
             }
             
-            close_file(dest_handle);
+            os_close_file(dest_handle);
         }
         
-        ZI_FREE(source_file.data);
-        ZI_FREE(dest_file.data);
+        SPLTMRG_FREE(file_buffer.data);
+        SPLTMRG_FREE(header_data.data);
     }
     
 	return 0;

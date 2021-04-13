@@ -29,23 +29,17 @@
 //
 #include "splitmerge.h"
 
+#if defined(SPLITMERGE_WIN32)
+#  include "win32_splitmerge.c"
+#else
+#  include "crt_splitmerge.c"
+#endif
+
 
 //~~~~~~~~~~~~~~~~
 //
 // PROCEDURES
 //
-static void *
-spltmrg_alloc(i64 size) {
-    void *result = malloc(size);
-    
-    char *data = (char*)result;
-    For(i64, it_index, size) {
-        data[it_index] = 0;
-    }
-    
-    return result;
-}
-
 static bool
 is_big_endian() {
 	union {int i; char c[sizeof(int)];} x;
@@ -61,141 +55,14 @@ is_big_endian() {
 #define is_little_endian() (!is_big_endian())
 
 
-//~~~~~~~~~~~~~~~~
-//
-// FILE
-//
-static File_Handle
-open_file_for_reading(char *file_name) {
-    File_Handle result = fopen(file_name, "rb");
-    return result;
-}
-
-static File_Handle
-open_file_for_writing(char *file_name) {
-    File_Handle result = fopen(file_name, "wb");
-    return result;
-}
-
-static bool
-is_file(File_Handle handle) {
-    if(handle) {
-        return true;
-    }
-    return false;
-}
-
-static i64
-get_size_of_file(File_Handle handle) {
-    i64 result = 0;
-    if(handle) {
-        fpos_t current = 0;
-        fpos_t size    = 0;
-        
-        fgetpos(handle, &current);
-        fseek(handle, 0, SEEK_END);
-        fgetpos(handle, &size);
-        fsetpos(handle, &current);
-        
-        result = size;
-    }
-    
-    return result;
-}
-
-static i64
-get_remaining_size_of_file(File_Handle handle) {
-    i64 result = 0;
-    
-    if(handle) {
-        fpos_t current = 0;
-        fpos_t size    = 0;
-        
-        fgetpos(handle, &current);
-        fseek(handle, 0, SEEK_END);
-        fgetpos(handle, &size);
-        fsetpos(handle, &current);
-        
-        result = size - current;
-    }
-    
-    return result;
-}
-
-static void
-close_file(File_Handle handle) {
-    fclose(handle);
-}
-
 static File_Data
 make_file_data(i64 capacity) {
     File_Data result = {0};
     
     result.capacity = capacity;
-    result.data     = ZI_ALLOC(u8, result.capacity);
+    result.data     = SPLTMRG_ALLOC(u8, result.capacity);
     
     return result;
-}
-
-static i64
-read_file(File_Data *file, File_Handle handle, i64 read_amount) {
-    i64 bytes_written = 0;
-    
-    if(file && handle) {
-        if(read_amount > file->capacity - file->length) {
-            read_amount = file->capacity - file->length;
-        }
-        
-        i64 remaining_length = get_remaining_size_of_file(handle);
-        
-        if(read_amount > remaining_length) {
-            read_amount = remaining_length;
-        }
-        
-        fpos_t offset = 0;
-        fgetpos(handle, &offset);
-        
-        bytes_written = fread(file->data + file->length, 1, read_amount, handle);
-        
-        offset += bytes_written;
-        fsetpos(handle, &offset);
-        
-        file->length += bytes_written;
-    }
-    
-    return bytes_written;
-}
-
-static File_Data
-read_entire_file(File_Handle handle) {
-    File_Data result = {0};
-    
-    if(handle) {
-        result.capacity = get_size_of_file(handle);
-        result.length   = result.capacity;
-        result.data     = ZI_ALLOC(u8, result.capacity);
-        
-        fseek(handle, 0, SEEK_SET);
-        
-        fread(result.data, 1, result.capacity, handle);
-    }
-    
-    return result;
-}
-
-static i64
-write_data_to_file(File_Handle handle, u8 *data, i64 length) {
-    i64 bytes_written = 0;
-    
-    if(handle) {
-        fpos_t offset = 0;
-        fgetpos(handle, &offset);
-        bytes_written = fwrite(data, 1, length, handle);
-        offset += bytes_written;
-        fsetpos(handle, &offset);
-    }
-    
-    return bytes_written;
 }
 
 
@@ -246,7 +113,7 @@ make_string(i32 capacity) {
     String result = {0};
     
     result.capacity = capacity;
-    result.data     = ZI_ALLOC(char, result.capacity);
+    result.data     = SPLTMRG_ALLOC(char, result.capacity);
     
     return result;
 }
@@ -266,12 +133,146 @@ find_index_of_last(String str, char c) {
     return result;
 }
 
+static bool
+begins_with_char(String a, char b) {
+    if(a.data && a.data[0] == b) {
+        return true;
+    }
+    return false;
+}
+
+static bool
+begins_with_cstring(String a, char *b_data, i32 b_length) {
+    if(a.data && b_data && a.length >= b_length) {
+        For(i32, it_index, b_length) {
+            if(a.data[it_index] != b_data[it_index]) {
+                return false;
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
+static bool
+begins_with_string(String a, String b) {
+    return begins_with_cstring(a, b.data, b.length);
+}
+
+static bool
+begins_with_ntstring(String a, char *b) {
+    return begins_with_cstring(a, b, get_length_of_ntstring(b));
+}
+
+static bool
+ends_with_char(String a, char b) {
+    if(a.data && a.data[a.length - 1] == b) {
+        return true;
+    }
+    return false;
+}
+
+static bool
+ends_with_cstring(String a, char *b_data, i32 b_length) {
+    if(a.data && b_data && a.length >= b_length) {
+        rfor(i32, it_index, b_length) {
+            if(a.data[a.length - (b_length - it_index)] != b_data[it_index]) {
+                return false;
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
+static bool
+ends_with_string(String a, String b) {
+    return ends_with_cstring(a, b.data, b.length);
+}
+
+static bool
+ends_with_ntstring(String a, char *b) {
+    return ends_with_cstring(a, b, get_length_of_ntstring(b));
+}
+
 static void
 advance_string(String *str, i32 amount) {
     if(str) {
         str->data   += amount;
         str->length -= amount;
     }
+}
+
+static i32
+count_instance_of_char(String a, char b) {
+    i32 result = 0;
+    
+    if(a.data) {
+        For(i32, it_index, a.length) {
+            if(a.data[it_index] == b) {
+                result += 1;
+            }
+        }
+    }
+    
+    return result;
+}
+
+static i32
+count_instance_of_cstring(String a, char *b_data, i32 b_length) {
+    i32 result = 0;
+    
+    if(a.data && b_data) {
+        while(a.length > 0) {
+            if(begins_with_cstring(a, b_data, b_length)) {
+                advance_string(&a, b_length);
+                result += 1;
+            } else {
+                advance_string(&a, 1);
+            }
+        }
+    }
+    
+    return result;
+}
+
+static i32
+count_instance_of_string(String a, String b) {
+    return count_instance_of_cstring(a, b.data, b.length);
+}
+
+static i32
+count_instance_of_ntstring(String a, char *b) {
+    return count_instance_of_cstring(a, b, get_length_of_ntstring(b));
+}
+
+static i32
+index_of_parent_path(String str) {
+    i32 result = -1;
+    
+    if(ends_with_char(str, '/') || ends_with_char(str, '\\')) {
+        str.length -= 1;
+    } else {
+        i32 index = find_index_of_last(str, '/');
+        
+        if(index >= 0) {
+            str.length -= str.length - index - 1;
+        } else {
+            index = find_index_of_last(str, '\\');
+            
+            if(index >= 0) {
+                str.length -= str.length - index - 1;
+            }
+        }
+    }
+    
+    result = find_index_of_last(str, '/');
+    
+    if(result < 0) {
+        result = find_index_of_last(str, '\\');
+    }
+    
+    return result;
 }
 
 static void
@@ -306,7 +307,7 @@ maybe_grow_string(String *str, i32 new_length) {
                 str->capacity += 64;
             }
             
-            str->data = ZI_REALLOC(char, str->data, str->capacity);
+            str->data = SPLTMRG_REALLOC(char, str->data, str->capacity);
         }
     }
 }

@@ -32,25 +32,59 @@
 
 //~~~~~~~~~~~~~~~~
 //
+// SPLIT NON-NITRO MODE
+//
+#if !defined(SPLITMERGE_NITRO_MODE)
+
+#define WELCOME_MSG         SPLITMERGE_WELCOME_MSG
+#define FILE_LIMIT          SPLITMERGE_FILE_LIMIT
+#define MAX_FIRST_FILE_SIZE SPLITMERGE_MAX_FIRST_FILE_SIZE
+
+#endif
+
+
+//~~~~~~~~~~~~~~~~
+//
+// SPLIT NITRO MODE
+//
+#if defined(SPLITMERGE_NITRO_MODE)
+
+#define WELCOME_MSG         SPLITMERGE_NITRO_WELCOME_MSG
+#define FILE_LIMIT          SPLITMERGE_NITRO_FILE_LIMIT
+#define MAX_FIRST_FILE_SIZE SPLITMERGE_NITRO_MAX_FIRST_FILE_SIZE
+
+#endif
+
+
+//~~~~~~~~~~~~~~~~
 //
 //
-static u32
-get_unique_id() {
-	u32 result = 0;
+//
+static i32
+get_split_count(i64 file_size) {
+    i32 result = 0;
     
-	u16 n0 = (u16)rand();
-	u16 n1 = (u16)rand();
+    if(file_size >= MAX_FIRST_FILE_SIZE) {
+        while(file_size > 0) {
+            file_size -= FILE_LIMIT;
+            result    += 1;
+        }
+    }
     
-	result = ((u32)n0 | ((u32)n1 << 16));
-    
-	return result;
+    return result;
 }
 
 static void
 append_file_data(File_Data *file, u8 *data, i64 length) {
-    For(i64, it_index, length) {
-        file->data[file->length] = data[it_index];
-        file->length += 1;
+    if(file) {
+        if(length >= file->capacity - file->length) {
+            length = file->capacity - file->length;
+        }
+        
+        For(i64, it_index, length) {
+            file->data[file->length] = data[it_index];
+            file->length += 1;
+        }
     }
 }
 
@@ -61,12 +95,14 @@ append_file_data(File_Data *file, u8 *data, i64 length) {
 //
 int
 main(int arg_count, char **arg_data) {
-    printf("SPLITMERGE <split>\n");
+    printf("%s <split>\n", WELCOME_MSG);
     printf("%d potential files to split.\n", arg_count - 1);
     
-    srand((unsigned int)time(NULL));
+    u64 random_seed = os_set_random_seed();
     
+    String file_name   = make_string(128);
     String output_path = make_string(128);
+    String source_path;
     
     {
         append_ntstring(&output_path, arg_data[0]);
@@ -83,17 +119,38 @@ main(int arg_count, char **arg_data) {
             }
         }
         
+        source_path = output_path;
+        
         append_cstring(&output_path, UNPACK_NTSTRING("split_output/0x"));
     }
     
     for_range(i32, arg_index, 1, arg_count) {
         printf("---===##===---\n");
         
-        char *arg = arg_data[arg_index];
+        file_name.length = 0;
         
-        String file_name = {0};
-        file_name.data   = arg;
-        file_name.length = get_length_of_ntstring(arg);
+        String arg = set_string_from_ntstring(arg_data[arg_index]);
+        
+        if(begins_with_cstring(arg, UNPACK_NTSTRING("..\\")) ||
+           begins_with_cstring(arg, UNPACK_NTSTRING("../")))
+        {
+            append_string(&file_name, source_path);
+            
+            i32 up_count = count_instance_of_cstring(arg, UNPACK_NTSTRING("../"));
+            up_count += count_instance_of_cstring(arg, UNPACK_NTSTRING("..\\"));
+            
+            while(up_count > 0) {
+                i32 index = index_of_parent_path(file_name);
+                
+                if(index >= 0) {
+                    file_name.length -= file_name.length - index - 1;
+                }
+                
+                up_count -= 1;
+            }
+        } else {
+            append_string(&file_name, arg);
+        }
         
         {
             i32 index = find_index_of_last(file_name, '/');
@@ -109,28 +166,32 @@ main(int arg_count, char **arg_data) {
             }
         }
         
-        File_Handle file_handle = open_file_for_reading(arg);
+        File_Handle file_handle = os_open_file_for_reading(arg.data);
         
-        if(is_file(file_handle)) {
-            i64 file_size       = get_size_of_file(file_handle);
+        if(os_is_handle_valid(file_handle)) {
+            i64 file_size       = os_get_size_of_file(file_handle);
             i64 total_file_size = file_size;
             
-            if(file_size > SPLITMERGE_MAX_FIRST_FILE_SIZE) {
-                File_Data file = make_file_data(SPLITMERGE_FILE_LIMIT);
+            i32 split_count = get_split_count(total_file_size + file_name.length);
+            
+            if(split_count > 0) {
+                File_Data file = make_file_data(FILE_LIMIT);
                 
                 String out_file_name = make_string(128);
                 
                 Shared_Header shared_header = {0};
-                shared_header.validation_0 = 'S';
-                shared_header.validation_1 = '+';
-                shared_header.validation_2 = 'M';
+                
+                shared_header.validation_0 = SPLITMERGE_HEADER_VALIDATION[0];
+                shared_header.validation_1 = SPLITMERGE_HEADER_VALIDATION[1];
+                shared_header.validation_2 = SPLITMERGE_HEADER_VALIDATION[2];
                 shared_header.version      = SPLITMERGE_FILE_VERSION;
-                shared_header.unique_id    = get_unique_id();
+                shared_header.unique_id    = (u32)os_get_random_u64(&random_seed);
+                
                 if(is_big_endian()) {
                     shared_header.flags |= Header_Flag__Big_Endian;
                 }
                 
-                while(file_size > 0) {
+                For(i32, it_index, split_count) {
                     file.length = 0;
                     
                     if(shared_header.file_index == 0) {
@@ -147,38 +208,39 @@ main(int arg_count, char **arg_data) {
                         append_file_data(&file, (u8*)&shared_header, sizeof(Shared_Header));
                     }
                     
-                    if(read_file(&file, file_handle, file.capacity - file.length) > 0) {
+                    printf("Splitting file %d/%d\n", it_index + 1, split_count);
+                    
+                    if(os_read_file(&file, file_handle, file.capacity - file.length) > 0) {
                         out_file_name.length = 0;
                         
                         append_cstring(&out_file_name, output_path.data, output_path.length);
                         append_u32(&out_file_name, shared_header.unique_id, 16);
                         append_char(&out_file_name, '_');
                         append_u32(&out_file_name, shared_header.file_index, 10);
-                        append_cstring(&out_file_name, UNPACK_NTSTRING(".spltmrg"));
+                        append_cstring(&out_file_name, SPLITMERGE_FILE_EXTENSION_CSTRING);
                         null_terminate(&out_file_name);
                         
-                        File_Handle out_file_handle = open_file_for_writing(out_file_name.data);
+                        File_Handle out_file_handle = os_open_file_for_writing(out_file_name.data);
                         
-                        write_data_to_file(out_file_handle, file.data, file.length);
+                        os_write_file(out_file_handle, file.data, file.length);
                         
-                        close_file(out_file_handle);
+                        os_close_file(out_file_handle);
                         
                         shared_header.file_index += 1;
                     }
-                    
-                    file_size = get_remaining_size_of_file(file_handle);
-                    
-                    {
-                        float p = (float)file_size / (float)total_file_size;
-                        printf("Splitting file %.2f%%\n", (1.0f - p) * 100.0f);
-                    }
                 }
                 
-                ZI_FREE(file.data);
+                SPLTMRG_FREE(file.data);
+                SPLTMRG_FREE(out_file_name.data);
+            } else {
+                printf("%s is too small, minimum file size is %lld bytes\n",
+                       arg.data, (MAX_FIRST_FILE_SIZE + 1));
             }
+        } else {
+            printf("Invalid file: \"%s\"\n", arg.data);
         }
         
-        close_file(file_handle);
+        os_close_file(file_handle);
     }
     
     return 0;
