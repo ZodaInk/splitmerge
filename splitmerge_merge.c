@@ -39,6 +39,7 @@ typedef struct Merge_Bundle {
     u32     file_count;
     u32     file_capacity;
     
+    u16    total_file_count;
     u32    unique_id;
     String out_file_name;
 } Merge_Bundle;
@@ -211,11 +212,13 @@ main(int arg_count, char **arg_data) {
                             
                             if(should_swap_endian(shared_header->flags)) {
                                 header->file_name_length = swap_endian_u16(header->file_name_length);
+                                header->total_file_count = swap_endian_u16(header->total_file_count);
                             }
                             
-                            char *file_name_pos = (char*)file.data + file.length;
+                            bundle->total_file_count = header->total_file_count;
+                            bundle->out_file_name    = make_string(64);
                             
-                            bundle->out_file_name = make_string(64);
+                            char *file_name_pos = (char*)file.data + file.length;
                             
                             append_string(&bundle->out_file_name, source_path);
                             
@@ -270,70 +273,75 @@ main(int arg_count, char **arg_data) {
             
             Merge_Bundle *bundle = master_list.data + bundle_index;
             
-            File_Handle dest_handle = os_open_file_for_writing(bundle->out_file_name.data);
-            
-            if(dest_handle) {
-                For(u32, file_index, bundle->file_count) {
-                    File_Handle source_handle = os_open_file_for_reading(bundle->files[file_index].data);
-                    
-                    header_data.length = 0;
-                    
-                    if(source_handle) {
-                        if(file_index == 0) {
-                            if(os_read_file(&header_data, source_handle, sizeof(First_Header)) > 0)
-                            {
-                                First_Header *header = (First_Header*)header_data.data;
+            if(bundle->file_count == bundle->total_file_count) {
+                File_Handle dest_handle = os_open_file_for_writing(bundle->out_file_name.data);
+                
+                if(os_is_handle_valid(dest_handle)) {
+                    For(u32, file_index, bundle->file_count) {
+                        File_Handle source_handle = os_open_file_for_reading(bundle->files[file_index].data);
+                        
+                        header_data.length = 0;
+                        
+                        if(os_is_handle_valid(source_handle)) {
+                            if(file_index == 0) {
+                                if(os_read_file(&header_data, source_handle, sizeof(First_Header)) > 0)
+                                {
+                                    First_Header *header = (First_Header*)header_data.data;
+                                    
+                                    u16 file_name_length = header->file_name_length;
+                                    if(should_swap_endian(header->shared.flags)) {
+                                        file_name_length = swap_endian_u16(file_name_length);
+                                    }
+                                    
+                                    os_move_file_pointer(source_handle, file_name_length + 1);
+                                }
+                            } else {
+                                os_move_file_pointer(source_handle, sizeof(Shared_Header));
+                            }
+                            
+                            i64 remaining_length = os_get_remaining_size_of_file(source_handle);
+                            while(remaining_length > 0) {
+                                read_data.length   = 0;
+                                read_data.data     = file_buffer.data     + file_buffer.length;
+                                read_data.capacity = file_buffer.capacity - file_buffer.length;
                                 
-                                u16 file_name_length = header->file_name_length;
-                                if(should_swap_endian(header->shared.flags)) {
-                                    file_name_length = swap_endian_u16(file_name_length);
+                                if(os_read_file(&read_data, source_handle, read_data.capacity)) {
+                                    file_buffer.length += read_data.length;
+                                    
+                                    if(file_buffer.length == file_buffer.capacity) {
+                                        printf("Merging file %d/%d - chunk %u/%u\n",
+                                               bundle_index + 1, master_list.count,
+                                               file_index, bundle->file_count);
+                                        
+                                        os_write_file(dest_handle, file_buffer.data, file_buffer.length);
+                                        
+                                        file_buffer.length = 0;
+                                    }
                                 }
                                 
-                                os_move_file_pointer(source_handle, file_name_length + 1);
+                                remaining_length = os_get_remaining_size_of_file(source_handle);
                             }
-                        } else {
-                            os_move_file_pointer(source_handle, sizeof(Shared_Header));
                         }
                         
-                        i64 remaining_length = os_get_remaining_size_of_file(source_handle);
-                        while(remaining_length > 0) {
-                            read_data.length   = 0;
-                            read_data.data     = file_buffer.data     + file_buffer.length;
-                            read_data.capacity = file_buffer.capacity - file_buffer.length;
-                            
-                            if(os_read_file(&read_data, source_handle, read_data.capacity)) {
-                                file_buffer.length += read_data.length;
-                                
-                                if(file_buffer.length == file_buffer.capacity) {
-                                    printf("Merging file %d/%d - chunk %u/%u\n",
-                                           bundle_index + 1, master_list.count,
-                                           file_index, bundle->file_count);
-                                    
-                                    os_write_file(dest_handle, file_buffer.data, file_buffer.length);
-                                    
-                                    file_buffer.length = 0;
-                                }
-                            }
-                            
-                            remaining_length = os_get_remaining_size_of_file(source_handle);
-                        }
+                        os_close_file(source_handle);
                     }
                     
-                    os_close_file(source_handle);
+                    if(file_buffer.length > 0) {
+                        printf("Merging file %d/%d - chunk %u/%u\n",
+                               bundle_index + 1, master_list.count,
+                               bundle->file_count, bundle->file_count);
+                        
+                        os_write_file(dest_handle, file_buffer.data, file_buffer.length);
+                        
+                        file_buffer.length = 0;
+                    }
                 }
                 
-                if(file_buffer.length > 0) {
-                    printf("Merging file %d/%d - chunk %u/%u\n",
-                           bundle_index + 1, master_list.count,
-                           bundle->file_count, bundle->file_count);
-                    
-                    os_write_file(dest_handle, file_buffer.data, file_buffer.length);
-                    
-                    file_buffer.length = 0;
-                }
+                os_close_file(dest_handle);
+            } else {
+                printf("There should be %d total files, but found %d\n",
+                       bundle->total_file_count, bundle->file_count);
             }
-            
-            os_close_file(dest_handle);
         }
         
         SPLTMRG_FREE(file_buffer.data);

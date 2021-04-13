@@ -198,6 +198,7 @@ main(int arg_count, char **arg_data) {
                         First_Header header = {0};
                         header.shared           = shared_header;
                         header.file_name_length = (u16)file_name.length;
+                        header.total_file_count = (u16)split_count;
                         
                         u8 null_byte = 0;
                         
